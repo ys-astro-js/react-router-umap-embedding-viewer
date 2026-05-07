@@ -1,0 +1,34 @@
+# dependencies
+node_modules/
+.pnpm-store/
+
+# build output
+build/
+.react-router/
+.vercel/
+dist/
+
+# environment and secrets
+.env
+.env.*
+!.env.example
+
+# logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# editor and OS files
+.DS_Store
+.idea/
+.vscode/
+
+# local caches
+.cache/
+.turbo/
+
+# Codex local workspace metadata
+.agents/
+skills-lock.json

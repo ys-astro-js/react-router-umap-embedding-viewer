@@ -8,7 +8,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ArrowUpIcon, Loader2Icon, RotateCcwIcon } from "lucide-react";
+import { Link } from "react-router";
+import {
+  ArrowUpIcon,
+  CameraIcon,
+  Loader2Icon,
+  RotateCcwIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import type { EmbedActionData } from "./embed";
@@ -120,6 +126,15 @@ export default function Home() {
 
   return (
     <main className="min-h-screen overflow-hidden bg-background text-foreground">
+      <div className="fixed left-4 top-4 z-10">
+        <Button asChild variant="outline">
+          <Link to="/faces">
+            <CameraIcon data-icon="inline-start" />
+            얼굴 인식
+          </Link>
+        </Button>
+      </div>
+
       {hasMounted ? (
         <SceneErrorBoundary>
           <Suspense fallback={<div className="fixed inset-0 embedding-grid" />}>

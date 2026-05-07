@@ -7,6 +7,8 @@ build/
 .react-router/
 .vercel/
 dist/
+public/models/face/*.onnx
+public/ort/
 
 # environment and secrets
 .env

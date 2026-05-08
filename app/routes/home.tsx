@@ -12,6 +12,7 @@ import { Link } from "react-router";
 import {
   ArrowUpIcon,
   CameraIcon,
+  SearchIcon,
   Loader2Icon,
   RotateCcwIcon,
 } from "lucide-react";
@@ -126,7 +127,13 @@ export default function Home() {
 
   return (
     <main className="min-h-screen overflow-hidden bg-background text-foreground">
-      <div className="fixed left-4 top-4 z-10">
+      <div className="fixed left-4 top-4 z-10 flex items-center gap-2">
+        <Button asChild variant="outline">
+          <Link to="/multimodal">
+            <SearchIcon data-icon="inline-start" />
+            멀티모달 검색
+          </Link>
+        </Button>
         <Button asChild variant="outline">
           <Link to="/faces">
             <CameraIcon data-icon="inline-start" />

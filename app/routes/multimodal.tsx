@@ -8,6 +8,7 @@ import {
   PlusIcon,
   RotateCcwIcon,
   SearchIcon,
+  Trash2Icon,
   TypeIcon,
   XIcon,
 } from "lucide-react";
@@ -187,43 +188,64 @@ function ContentTile({
   isDimmed,
   isSelected,
   onSelect,
+  onDelete,
 }: {
   item: StoredMultimodalItem;
   rank?: number;
   isDimmed: boolean;
   isSelected: boolean;
   onSelect: () => void;
+  onDelete: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <div
       className={cn(
-        "relative aspect-square min-h-0 rounded-lg border bg-card text-card-foreground outline-none transition-[opacity,filter,border-color]",
-        "focus-visible:ring-ring/50 focus-visible:ring-[3px]",
+        "group relative aspect-square min-h-0 rounded-lg transition-[opacity,filter]",
         isDimmed && "opacity-18 grayscale",
-        isSelected && "ring-ring ring-3",
-        rank && "border-primary",
       )}
-      onClick={onSelect}
-      aria-label={`${item.label} 유사 항목 보기`}
     >
-      {item.kind === "image" && item.previewDataUrl ? (
-        <img
-          src={item.previewDataUrl}
-          alt=""
-          className="size-full rounded-lg object-cover"
-        />
-      ) : (
-        <span className="flex size-full items-center justify-center p-4 text-center text-sm font-semibold leading-snug">
-          <span className="line-clamp-5">{item.text ?? item.label}</span>
-        </span>
-      )}
-      {rank ? (
-        <span className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground">
-          {rank}
-        </span>
-      ) : null}
-    </button>
+      <button
+        type="button"
+        className={cn(
+          "size-full rounded-lg border bg-card text-card-foreground outline-none transition-[border-color]",
+          "focus-visible:ring-ring/50 focus-visible:ring-[3px]",
+          isSelected && "ring-ring ring-3",
+          rank && "border-primary",
+        )}
+        onClick={onSelect}
+        aria-label={`${item.label} 유사 항목 보기`}
+      >
+        {item.kind === "image" && item.previewDataUrl ? (
+          <img
+            src={item.previewDataUrl}
+            alt=""
+            className="size-full rounded-lg object-cover"
+          />
+        ) : (
+          <span className="flex size-full items-center justify-center p-4 text-center text-sm font-semibold leading-snug">
+            <span className="line-clamp-5">{item.text ?? item.label}</span>
+          </span>
+        )}
+        {rank ? (
+          <span className="absolute right-2 top-2 flex size-7 items-center justify-center rounded-full bg-primary text-sm font-bold text-primary-foreground">
+            {rank}
+          </span>
+        ) : null}
+      </button>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        className="absolute right-2 bottom-2 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+        onClick={(event) => {
+          event.stopPropagation();
+          onDelete();
+        }}
+        aria-label={`${item.label} 삭제`}
+      >
+        <Trash2Icon data-icon="inline-start" />
+      </Button>
+    </div>
   );
 }
 
@@ -426,6 +448,25 @@ export default function MultimodalSearch() {
     });
   }
 
+  async function deleteItem(itemId: string) {
+    try {
+      const nextItems = items.filter((item) => item.id !== itemId);
+      await persistItems(nextItems);
+
+      if (query?.sourceId === itemId) {
+        setQuery(null);
+      }
+
+      toast.info("등록된 항목을 삭제했습니다.");
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "등록된 항목을 삭제하지 못했습니다.",
+      );
+    }
+  }
+
   async function requestEmbedding(formData: FormData) {
     const response = await fetch("/jina-embed", {
       method: "POST",
@@ -605,6 +646,9 @@ export default function MultimodalSearch() {
                 isDimmed={isDimmed}
                 isSelected={isSelected}
                 onSelect={() => selectItem(item)}
+                onDelete={() => {
+                  void deleteItem(item.id);
+                }}
               />
             );
           })}

@@ -10,6 +10,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+import type { FaceDetection } from "~/lib/face-recognition";
 import {
   createStoredFace,
   readStoredFaces,
@@ -22,7 +23,6 @@ import { Button } from "~/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardFooter,
   CardHeader,
   CardTitle,
@@ -34,12 +34,12 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "~/components/ui/popover";
-import { Separator } from "~/components/ui/separator";
 import { Textarea } from "~/components/ui/textarea";
 import { ToggleGroup, ToggleGroupItem } from "~/components/ui/toggle-group";
 import type { Route } from "./+types/faces.manage";
 
 type ModelStatus = "idle" | "loading" | "ready" | "error";
+const PREVIEW_INTERVAL_MS = 220;
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -64,8 +64,73 @@ function groupLabel(group: FaceGroup) {
   return group === "verified" ? "인증됨" : "금지됨";
 }
 
+function fitCoverRect(
+  sourceWidth: number,
+  sourceHeight: number,
+  targetWidth: number,
+  targetHeight: number,
+) {
+  const scale = Math.max(targetWidth / sourceWidth, targetHeight / sourceHeight);
+  const width = sourceWidth * scale;
+  const height = sourceHeight * scale;
+
+  return {
+    scale,
+    offsetX: (targetWidth - width) / 2,
+    offsetY: (targetHeight - height) / 2,
+  };
+}
+
+function drawRegistrationOverlay(
+  canvas: HTMLCanvasElement,
+  video: HTMLVideoElement,
+  detection: FaceDetection | null,
+  group: FaceGroup,
+) {
+  const context = canvas.getContext("2d");
+  if (!context || video.videoWidth === 0 || video.videoHeight === 0) {
+    return;
+  }
+
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  const width = Math.max(1, Math.floor(rect.width * dpr));
+  const height = Math.max(1, Math.floor(rect.height * dpr));
+
+  if (canvas.width !== width || canvas.height !== height) {
+    canvas.width = width;
+    canvas.height = height;
+  }
+
+  context.clearRect(0, 0, width, height);
+
+  if (!detection) {
+    return;
+  }
+
+  context.save();
+  context.scale(dpr, dpr);
+  const cover = fitCoverRect(
+    video.videoWidth,
+    video.videoHeight,
+    rect.width,
+    rect.height,
+  );
+  const color = group === "verified" ? "#22d3ee" : "#ef4444";
+  const x = cover.offsetX + detection.box.x * cover.scale;
+  const y = cover.offsetY + detection.box.y * cover.scale;
+  const boxWidth = detection.box.width * cover.scale;
+  const boxHeight = detection.box.height * cover.scale;
+
+  context.strokeStyle = color;
+  context.lineWidth = 3;
+  context.strokeRect(x, y, boxWidth, boxHeight);
+  context.restore();
+}
+
 export default function FaceManagement() {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const [faces, setFaces] = useState<StoredFace[]>([]);
   const [name, setName] = useState("");
   const [group, setGroup] = useState<FaceGroup>("verified");
@@ -74,6 +139,9 @@ export default function FaceManagement() {
   const [modelStatus, setModelStatus] = useState<ModelStatus>("idle");
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [isCapturing, setIsCapturing] = useState(false);
+  const [previewDetection, setPreviewDetection] = useState<FaceDetection | null>(
+    null,
+  );
 
   const persistFaces = useCallback((nextFaces: StoredFace[]) => {
     setFaces(nextFaces);
@@ -83,6 +151,71 @@ export default function FaceManagement() {
   useEffect(() => {
     setFaces(readStoredFaces());
   }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+    let timeoutHandle = 0;
+    let frameHandle = 0;
+    let isProcessing = false;
+
+    async function startPreviewLoop() {
+      try {
+        const { loadFaceRecognitionEngine } = await import(
+          "~/lib/face-recognition"
+        );
+        const engine = await loadFaceRecognitionEngine();
+        if (!isMounted) {
+          return;
+        }
+
+        const tick = async () => {
+          if (!isMounted) {
+            return;
+          }
+
+          const video = videoRef.current;
+          const canvas = canvasRef.current;
+          if (video && canvas && !isProcessing && video.videoWidth > 0) {
+            isProcessing = true;
+            try {
+              const detections = await engine.detect(video);
+              const largest =
+                detections
+                  .slice()
+                  .sort(
+                    (left, right) =>
+                      right.box.width * right.box.height -
+                      left.box.width * left.box.height,
+                  )[0] ?? null;
+              setPreviewDetection(largest);
+              drawRegistrationOverlay(canvas, video, largest, group);
+            } catch {
+              setPreviewDetection(null);
+              drawRegistrationOverlay(canvas, video, null, group);
+            } finally {
+              isProcessing = false;
+            }
+          }
+
+          timeoutHandle = window.setTimeout(() => {
+            frameHandle = window.requestAnimationFrame(tick);
+          }, PREVIEW_INTERVAL_MS);
+        };
+
+        frameHandle = window.requestAnimationFrame(tick);
+      } catch {
+        setPreviewDetection(null);
+      }
+    }
+
+    void startPreviewLoop();
+
+    return () => {
+      isMounted = false;
+      window.clearTimeout(timeoutHandle);
+      window.cancelAnimationFrame(frameHandle);
+    };
+  }, [group]);
 
   useEffect(() => {
     let stream: MediaStream | null = null;
@@ -205,9 +338,6 @@ export default function FaceManagement() {
             </Button>
             <div>
               <h1 className="text-lg font-semibold">얼굴 등록 관리</h1>
-              <p className="text-sm text-muted-foreground">
-                이 브라우저에 저장된 로컬 얼굴 임베딩
-              </p>
             </div>
           </div>
           <Badge variant="secondary">{faces.length} faces</Badge>
@@ -215,7 +345,7 @@ export default function FaceManagement() {
       </header>
 
       <section className="mx-auto grid max-w-6xl gap-5 px-4 py-6 lg:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
-        <div className="overflow-hidden rounded-lg border bg-black">
+        <div className="relative overflow-hidden rounded-lg border bg-black">
           <video
             ref={videoRef}
             className="aspect-video size-full object-cover"
@@ -224,14 +354,16 @@ export default function FaceManagement() {
             autoPlay
             aria-label="얼굴 등록 카메라 미리보기"
           />
+          <canvas
+            ref={canvasRef}
+            className="pointer-events-none absolute inset-0 size-full"
+            aria-hidden
+          />
         </div>
 
         <Card>
           <CardHeader>
             <CardTitle>등록 현황</CardTitle>
-            <CardDescription>
-              인증됨은 cyan, 금지됨은 red 라벨로 인식 화면에 표시됩니다.
-            </CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             <div className="grid grid-cols-2 gap-3">
@@ -248,13 +380,9 @@ export default function FaceManagement() {
                 <div className="text-sm text-muted-foreground">금지됨</div>
               </div>
             </div>
-            <Separator />
-            <p className="text-sm text-muted-foreground">
-              {cameraError ??
-                (modelStatus === "loading"
-                  ? "모델을 불러오는 중입니다."
-                  : "우측 하단 추가 버튼으로 현재 카메라의 얼굴을 등록합니다.")}
-            </p>
+            {cameraError || modelStatus === "error" ? (
+              <p className="text-sm text-muted-foreground">{cameraError}</p>
+            ) : null}
           </CardContent>
         </Card>
       </section>
@@ -289,7 +417,9 @@ export default function FaceManagement() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <CardTitle className="truncate">{face.name}</CardTitle>
-                      <CardDescription>{formatDate(face.createdAt)}</CardDescription>
+                      <div className="text-sm text-muted-foreground">
+                        {formatDate(face.createdAt)}
+                      </div>
                     </div>
                     <Badge
                       variant={face.group === "blocked" ? "destructive" : "secondary"}
@@ -339,9 +469,11 @@ export default function FaceManagement() {
           <div className="flex flex-col gap-4">
             <div>
               <h2 className="text-base font-semibold">얼굴 추가</h2>
-              <p className="text-sm text-muted-foreground">
-                현재 카메라 프레임에서 가장 큰 얼굴을 등록합니다.
-              </p>
+              {previewDetection ? (
+                <p className="text-sm text-muted-foreground">
+                  score {Math.round(previewDetection.score * 100)}%
+                </p>
+              ) : null}
             </div>
             <div className="flex flex-col gap-2">
               <Label htmlFor="face-name">이름</Label>

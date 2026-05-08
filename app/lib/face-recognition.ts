@@ -21,6 +21,7 @@ export type FaceMatch = {
   score: number;
   bestSimilarity?: number;
   face?: StoredFace;
+  thumbnailDataUrl?: string;
 };
 
 type OrtModule = typeof import("onnxruntime-web");
@@ -33,6 +34,25 @@ const IOU_THRESHOLD = 0.3;
 const MODEL_ROOT = "/models/face";
 
 let sharedEnginePromise: Promise<FaceRecognitionEngine> | null = null;
+
+function fitContainRect(
+  sourceWidth: number,
+  sourceHeight: number,
+  targetWidth: number,
+  targetHeight: number,
+) {
+  const scale = Math.min(targetWidth / sourceWidth, targetHeight / sourceHeight);
+  const width = sourceWidth * scale;
+  const height = sourceHeight * scale;
+
+  return {
+    scale,
+    width,
+    height,
+    offsetX: (targetWidth - width) / 2,
+    offsetY: (targetHeight - height) / 2,
+  };
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
@@ -69,7 +89,7 @@ function makeCanvas(width: number, height: number) {
   return canvas;
 }
 
-function createThumbnail(
+export function createVideoThumbnail(
   video: HTMLVideoElement,
   box: FaceBox,
   size = 144,
@@ -186,7 +206,21 @@ export class FaceRecognitionEngine {
       return [];
     }
 
-    context.drawImage(video, 0, 0, DETECTOR_SIZE, DETECTOR_SIZE);
+    context.fillStyle = "black";
+    context.fillRect(0, 0, DETECTOR_SIZE, DETECTOR_SIZE);
+    const detectorRect = fitContainRect(
+      video.videoWidth,
+      video.videoHeight,
+      DETECTOR_SIZE,
+      DETECTOR_SIZE,
+    );
+    context.drawImage(
+      video,
+      detectorRect.offsetX,
+      detectorRect.offsetY,
+      detectorRect.width,
+      detectorRect.height,
+    );
     const imageData = context.getImageData(0, 0, DETECTOR_SIZE, DETECTOR_SIZE);
     const pixels = imageData.data;
     const tensorData = new Float32Array(1 * 3 * DETECTOR_SIZE * DETECTOR_SIZE);
@@ -251,16 +285,34 @@ export class FaceRecognitionEngine {
         continue;
       }
 
-      const topY = clamp(boxes[offset] ?? 0, 0, 1);
-      const topX = clamp(boxes[offset + 1] ?? 0, 0, 1);
-      const bottomY = clamp(boxes[offset + 2] ?? 0, 0, 1);
-      const bottomX = clamp(boxes[offset + 3] ?? 0, 0, 1);
-      const x = topX * video.videoWidth;
-      const y = topY * video.videoHeight;
-      const width = (bottomX - topX) * video.videoWidth;
-      const height = (bottomY - topY) * video.videoHeight;
+      const topY = clamp(boxes[offset] ?? 0, 0, 1) * DETECTOR_SIZE;
+      const topX = clamp(boxes[offset + 1] ?? 0, 0, 1) * DETECTOR_SIZE;
+      const bottomY = clamp(boxes[offset + 2] ?? 0, 0, 1) * DETECTOR_SIZE;
+      const bottomX = clamp(boxes[offset + 3] ?? 0, 0, 1) * DETECTOR_SIZE;
+      const x = clamp(
+        (topX - detectorRect.offsetX) / detectorRect.scale,
+        0,
+        video.videoWidth,
+      );
+      const y = clamp(
+        (topY - detectorRect.offsetY) / detectorRect.scale,
+        0,
+        video.videoHeight,
+      );
+      const right = clamp(
+        (bottomX - detectorRect.offsetX) / detectorRect.scale,
+        0,
+        video.videoWidth,
+      );
+      const bottom = clamp(
+        (bottomY - detectorRect.offsetY) / detectorRect.scale,
+        0,
+        video.videoHeight,
+      );
+      const width = right - x;
+      const height = bottom - y;
 
-      if (width >= 8 && height >= 8) {
+      if (width > 0.5 && height > 0.5) {
         detections.push({ box: { x, y, width, height }, score });
       }
     }
@@ -366,6 +418,7 @@ export class FaceRecognitionEngine {
         bestSimilarity: bestSimilarity >= 0 ? bestSimilarity : undefined,
         face:
           bestFace && bestSimilarity >= MATCH_THRESHOLD ? bestFace : undefined,
+        thumbnailDataUrl: createVideoThumbnail(video, detection.box, 112),
       });
     }
 
@@ -390,7 +443,7 @@ export class FaceRecognitionEngine {
 
     return {
       embedding,
-      thumbnailDataUrl: createThumbnail(video, largest.box),
+      thumbnailDataUrl: createVideoThumbnail(video, largest.box),
       detection: largest,
     };
   }

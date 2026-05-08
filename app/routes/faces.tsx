@@ -8,20 +8,20 @@ import {
 import { Link } from "react-router";
 import {
   ArrowLeftIcon,
-  CameraIcon,
-  Loader2Icon,
   SettingsIcon,
+  UserRoundIcon,
 } from "lucide-react";
 
 import type { FaceMatch } from "~/lib/face-recognition";
 import { readStoredFaces, type StoredFace } from "~/lib/face-store";
 import { Button } from "~/components/ui/button";
-import { Badge } from "~/components/ui/badge";
 import type { Route } from "./+types/faces";
 
 const FRAME_INTERVAL_MS = 150;
 
-type Status = "idle" | "loading" | "ready" | "error";
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
 export function meta({}: Route.MetaArgs) {
   return [
@@ -105,25 +105,54 @@ function drawOverlay(
     }
 
     const confidence = `${Math.round(match.bestSimilarity * 100)}%`;
-    const label =
-      face.group === "blocked" && face.reason
-        ? `${face.name} · ${confidence} · ${face.reason}`
-        : `${face.name} · ${confidence}`;
-    const labelX = x;
-    const labelY = Math.max(12, y - 30);
-    const labelHeight = 26;
-    context.font = "600 13px Geist, sans-serif";
+    context.font = "700 16px Geist, sans-serif";
+    const nameWidth = context.measureText(face.name).width + 18;
+    context.font = "700 14px Geist, sans-serif";
+    const confidenceWidth = context.measureText(confidence).width + 14;
+    const reason = face.group === "blocked" ? face.reason : undefined;
+    const reasonWidth = reason ? context.measureText(reason).width + 16 : 0;
     const labelWidth = Math.min(
-      rect.width - labelX - 12,
-      context.measureText(label).width + 20,
+      rect.width - 12,
+      Math.max(nameWidth + confidenceWidth, reasonWidth),
     );
+    const labelHeight = reason ? 52 : 28;
+    const prefersRight = x + boxWidth + labelWidth + 8 <= rect.width;
+    const labelX = prefersRight
+      ? x + boxWidth + 8
+      : clamp(x, 8, Math.max(8, rect.width - labelWidth - 8));
+    const labelY = prefersRight
+      ? clamp(y, 8, Math.max(8, rect.height - labelHeight - 8))
+      : clamp(y + boxHeight + 8, 8, Math.max(8, rect.height - labelHeight - 8));
 
     context.fillStyle = color;
-    context.beginPath();
-    context.roundRect(labelX, labelY, labelWidth, labelHeight, 8);
-    context.fill();
-    context.fillStyle = face.group === "verified" ? "#062027" : "#fff";
-    context.fillText(label, labelX + 10, labelY + 17, labelWidth - 20);
+    context.fillRect(labelX, labelY, Math.min(nameWidth, labelWidth), 28);
+    context.fillStyle = "black";
+    context.font = "700 16px Geist, sans-serif";
+    context.fillText(face.name, labelX + 9, labelY + 20, nameWidth - 18);
+
+    context.fillStyle = "black";
+    context.fillRect(
+      labelX + Math.min(nameWidth, labelWidth),
+      labelY,
+      Math.min(confidenceWidth, labelWidth - Math.min(nameWidth, labelWidth)),
+      28,
+    );
+    context.fillStyle = "#fff";
+    context.font = "700 14px Geist, sans-serif";
+    context.fillText(
+      confidence,
+      labelX + Math.min(nameWidth, labelWidth) + 7,
+      labelY + 19,
+      confidenceWidth - 14,
+    );
+
+    if (reason) {
+      context.fillStyle = "black";
+      context.fillRect(labelX, labelY + 32, labelWidth, 20);
+      context.fillStyle = "#fff";
+      context.font = "600 12px Geist, sans-serif";
+      context.fillText(reason, labelX + 8, labelY + 47, labelWidth - 16);
+    }
   }
 
   context.restore();
@@ -182,13 +211,10 @@ export default function Faces() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const facesRef = useRef<StoredFace[]>([]);
-  const [status, setStatus] = useState<Status>("idle");
-  const [statusText, setStatusText] = useState("카메라와 모델을 준비하는 중입니다.");
-  const [registeredCount, setRegisteredCount] = useState(0);
-  const [detectedCount, setDetectedCount] = useState(0);
+  const [statusText, setStatusText] = useState("");
+  const [matches, setMatches] = useState<FaceMatch[]>([]);
 
   const handleStatusText = useCallback((message: string) => {
-    setStatus("error");
     setStatusText(message);
   }, []);
 
@@ -196,7 +222,6 @@ export default function Faces() {
 
   useEffect(() => {
     facesRef.current = readStoredFaces();
-    setRegisteredCount(facesRef.current.length);
   }, []);
 
   useEffect(() => {
@@ -206,8 +231,6 @@ export default function Faces() {
     let isProcessing = false;
 
     async function startRecognitionLoop() {
-      setStatus("loading");
-
       try {
         const { loadFaceRecognitionEngine } = await import(
           "~/lib/face-recognition"
@@ -217,8 +240,7 @@ export default function Faces() {
           return;
         }
 
-        setStatus("ready");
-        setStatusText("브라우저 로컬에서 얼굴을 인식하고 있습니다.");
+        setStatusText("");
 
         const tick = async () => {
           if (!isMounted) {
@@ -231,11 +253,10 @@ export default function Faces() {
           if (video && canvas && !isProcessing && video.videoWidth > 0) {
             isProcessing = true;
             try {
-              const matches = await engine.recognize(video, facesRef.current);
-              setDetectedCount(matches.length);
-              drawOverlay(canvas, video, matches);
+              const nextMatches = await engine.recognize(video, facesRef.current);
+              setMatches(nextMatches);
+              drawOverlay(canvas, video, nextMatches);
             } catch (error) {
-              setStatus("error");
               setStatusText(
                 error instanceof Error
                   ? error.message
@@ -253,7 +274,6 @@ export default function Faces() {
 
         frameHandle = window.requestAnimationFrame(tick);
       } catch (error) {
-        setStatus("error");
         setStatusText(
           error instanceof Error
             ? error.message
@@ -303,21 +323,75 @@ export default function Faces() {
         </Button>
       </div>
 
-      <section className="absolute right-4 top-4 flex flex-col items-end gap-2">
-        <div className="flex items-center gap-2 rounded-full bg-black/55 px-3 py-2 text-sm font-medium backdrop-blur-md">
-          {status === "loading" ? (
-            <Loader2Icon data-icon="inline-start" className="animate-spin" />
-          ) : (
-            <CameraIcon data-icon="inline-start" />
-          )}
-          {statusText}
-        </div>
-        <div className="flex gap-2">
-          <Badge variant="secondary">{registeredCount} registered</Badge>
-          <Badge variant="outline" className="border-white/35 text-white">
-            {detectedCount} detected
-          </Badge>
-        </div>
+      <section className="absolute right-4 top-4 flex w-[min(22rem,calc(100vw-2rem))] flex-col gap-2">
+        {statusText ? (
+          <div className="bg-black/75 px-3 py-2 text-sm font-medium text-white backdrop-blur-md">
+            {statusText}
+          </div>
+        ) : null}
+        {matches.map((match, index) => {
+          const face = match.face;
+          const color =
+            face?.group === "verified"
+              ? "border-cyan-400 text-cyan-300"
+              : face?.group === "blocked"
+                ? "border-red-500 text-red-400"
+                : "border-white/70 text-white";
+          const confidence =
+            match.bestSimilarity === undefined
+              ? "-"
+              : `${Math.round(match.bestSimilarity * 100)}%`;
+
+          return (
+            <article
+              key={`${index}-${Math.round(match.box.x)}-${Math.round(match.box.y)}`}
+              className={`border bg-black/72 p-2 backdrop-blur-md ${color}`}
+            >
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex aspect-square items-center justify-center overflow-hidden bg-white/10">
+                  {match.thumbnailDataUrl ? (
+                    <img
+                      src={match.thumbnailDataUrl}
+                      alt=""
+                      className="size-full object-cover"
+                    />
+                  ) : (
+                    <UserRoundIcon />
+                  )}
+                </div>
+                <div className="flex aspect-square items-center justify-center overflow-hidden bg-white/10">
+                  {face?.thumbnailDataUrl ? (
+                    <img
+                      src={face.thumbnailDataUrl}
+                      alt=""
+                      className="size-full object-cover"
+                    />
+                  ) : (
+                    <UserRoundIcon />
+                  )}
+                </div>
+              </div>
+              <div className="mt-2 min-w-0">
+                <div className="flex items-start">
+                  <span className="truncate text-lg font-semibold leading-none">
+                    {face?.name ?? "Unknown"}
+                  </span>
+                  <span className="bg-black px-1.5 text-sm font-semibold leading-none text-white">
+                    {confidence}
+                  </span>
+                </div>
+                <div className="mt-1 text-xs text-white/70">
+                  {face ? (face.group === "verified" ? "인증됨" : "금지됨") : "미등록"}
+                </div>
+                {face?.reason ? (
+                  <div className="mt-2 bg-black px-2 py-1 text-xs text-white">
+                    {face.reason}
+                  </div>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
       </section>
     </main>
   );
